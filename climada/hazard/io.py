@@ -1311,6 +1311,71 @@ class HazardIO:
         # Now create the actual object we want to return!
         return cls(**hazard_kwargs)
 
+    @classmethod
+    def from_netcdf(cls, file_path, intensity_var, event_id, frequency, haz_type, description, fill_value=None, replace_value=0.0, fraction_value=1.0, latitude_name='latitude', longitude_name='longitude'):
+        """Read hazard in netcdf format and create
+        Parameters
+        ----------
+        file_path: str
+            filepath of a netcdf file.
+        intensity_var: str
+            name of variable within netcdf to use as intensity data
+        event_id: np.array
+            list of id's for each event
+        frequency: np.array
+            frequency of each event in years
+        fill_value: float
+            Fillvalue used in the netcdf data. Only required if the _FillValue attribute is missing.
+        replace_value: float or np.nan
+            Value to replace the fill value data with as the sparse matrix doesn't handle mased arrays.
+        fraction_value: float
+            Scalar value that is broadcasted to the shape of the intensity data.
+        Returns
+        -------
+        haz : climada.hazard.Hazard
+            Hazard object from the provided netcdf file
+        """
+
+        LOGGER.info('Reading %s', file_path)
+        haz = cls()
+        nc_data = Dataset(file_path, "r", format="NETCDF4")
+
+        haz.centroids = Centroids.from_lat_lon(nc_data.variables[latitude_name][...].ravel(),
+                                               nc_data.variables[longitude_name][...].ravel())
+
+        haz.tag.haz_type = haz_type
+        haz.tag.file_name = file_path
+        haz.tag.description = description
+
+        haz.units = getattr(nc_data[intensity_var], 'units')
+        haz.event_id = event_id
+        haz.frequency = frequency
+
+        if fill_value is None:
+            try:
+                fill_value = getattr(nc_data[intensity_var], '_FillValue')
+            except AttributeError as err:
+                print('No _FillValue attribute in netcdf or provided as argument to method.', err)
+
+        # Reading variable data and wrapping in np.array means no maskedarray is returned.
+        variable_data = np.array(nc_data.variables[intensity_var])
+
+        # Create a mask manually using the fill_value.
+        mask = np.where(variable_data == fill_value, True, False)
+
+        # Data is a 3D dense array in the netcdf. Sparse array requires 2D array as input so needs reshaping.
+        shape = (len(event_id), len(haz.centroids.lat))
+
+        variable_data = np.where(np.equal(mask, False), variable_data, replace_value).reshape(shape)
+        haz.intensity = sparse.csr_matrix(variable_data)
+
+        fraction_data = np.where(np.equal(mask, False), fraction_value, replace_value).reshape(shape)
+        haz.fraction = sparse.csr_matrix(fraction_data)
+
+        nc_data.close()
+
+        return haz
+    
     @staticmethod
     def _read_att_mat(data, file_name, var_names, centroids):
         """Read MATLAB hazard's attributes."""
