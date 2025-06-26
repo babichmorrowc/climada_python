@@ -46,6 +46,7 @@ from pyproj import CRS as pyprojCRS
 from rasterio.crs import CRS as rasterioCRS  # pylint: disable=no-name-in-module
 from scipy import sparse
 from tqdm import tqdm
+from netCDF4 import Dataset
 
 import climada.util.coordinates as u_coord
 import climada.util.dates_times as u_dt
@@ -1415,6 +1416,86 @@ class Impact:
             indptr=self.imp_mat.indptr,
             shape=self.imp_mat.shape,
         )
+    
+    def eai_to_netcdf(self, file_name, shape, metadata_attributes=None):
+        """
+        Write Out Expected Annual Impact Data to netCDF to a netCDF file.
+
+        file_name: str
+            Target path of the output netcdf file that will contain eai data.
+        shape: list
+            Length of the latitude and longitude coordinate dimensions.
+        metadata_atrributes: dict
+            Any attributes to be written to the root group of the netcdf file.
+        """
+
+        # extract the coordinate exposure data. Split them into seperate lat and long arrays
+        lat, lon = np.hsplit(self.coord_exp.data, 2)
+
+        lat = np.reshape(lat, shape)
+        lon = np.reshape(lon, shape)
+
+        netcdf_file = Dataset(file_name, "w", format="NETCDF4")
+
+        netcdf_file.createDimension("latitude", shape[0])
+        netcdf_file.createDimension("longitude", shape[1])
+
+        annual_impact = netcdf_file.createVariable("annual_impact", "f4", ("latitude", "longitude"))
+        latitude = netcdf_file.createVariable("exposure_latitude", "f4", ("latitude", "longitude"))
+        longitude = netcdf_file.createVariable("exposure_longitude", "f4", ("latitude", "longitude"))
+
+        latitude[:] = lat
+        longitude[:] = lon
+        annual_impact[:] = np.reshape(self.eai_exp.data, shape)
+
+        if metadata_attributes:
+            netcdf_file.setncatts(metadata_attributes)
+
+        netcdf_file.close()
+
+    def imp_to_netcdf(self, file_name, shape, original_netcdf, metadata_attributes=None):
+        """
+        Write Out Impact Data to netCDF to a netCDF file.
+
+        file_name: str
+            Target path of the output netcdf file that will contain eai data.
+        shape: list
+            Length of the latitude and longitude coordinate dimensions.
+        original_netcdf: str
+            Path of a netcdf file to copy time dimension and variable data from.
+        metadata_atrributes: dict
+            Any attributes to be written to the root group of the netcdf file.
+        """
+
+        # extract the coordinate exposure data. Split them into seperate lat and long arrays
+        lat, lon = np.hsplit(self.coord_exp.data, 2)
+
+        lat = np.reshape(lat, shape)
+        lon = np.reshape(lon, shape)
+
+        netcdf_file = Dataset(file_name, "w", format="NETCDF4")
+        hazard_file = Dataset(original_netcdf, "r", format="NETCDF4")
+
+        netcdf_file.createDimension("time", hazard_file.dimensions['time'].size)
+        netcdf_file.createDimension("latitude", shape[0])
+        netcdf_file.createDimension("longitude", shape[1])
+
+        impact = netcdf_file.createVariable("impact", "f4", ("time", "latitude", "longitude"))
+        latitude = netcdf_file.createVariable("exposure_latitude", "f4", ("latitude", "longitude"))
+        longitude = netcdf_file.createVariable("exposure_longitude", "f4", ("latitude", "longitude"))
+        time = netcdf_file.createVariable("time", "f4", ("time"))
+
+        latitude[:] = lat
+        longitude[:] = lon
+        time[:] = hazard_file.variables["time"][:]
+        time.setncatts(hazard_file["time"].__dict__)
+        impact[:] = np.reshape(self.imp_mat.toarray(), [len(self.event_id)] + shape)
+
+        if metadata_attributes:
+            netcdf_file.setncatts(metadata_attributes)
+
+        hazard_file.close()
+        netcdf_file.close()
 
     @staticmethod
     def read_sparse_csr(file_name):
